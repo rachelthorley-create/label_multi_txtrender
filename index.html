@@ -1,5 +1,3 @@
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,7 +17,7 @@
 </style>
 </head>
 <body>
-  <h2>Label Renderer v1.4</h2>
+  <h2>Label Renderer v1.5</h2>
   <p>Upload a JSON file exported from the generator to render PNG previews and download SVGs for all labels.</p>
   
   <input type="file" id="uploadLabel" accept=".json">
@@ -161,7 +159,7 @@ function createLabelSVG(labelObj, params){
 
   // compute total height
   let totalH = 0;
-  lines.forEach((ln, i)=>{
+  lines.forEach((ln,i)=>{
     totalH += ln.size;
     if(i===0 && lines.length>1) totalH += gap12Px;
     if(i===1 && lines.length>2) totalH += gap23Px;
@@ -177,26 +175,19 @@ function createLabelSVG(labelObj, params){
   svg += `<rect x="0" y="0" width="${W}" height="${H}" rx="${radius}" ry="${radius}" fill="white" stroke="red" stroke-width="1"/>`;
   svg += `<circle cx="${W/2}" cy="${circleTopPx + circleRPx}" r="${circleRPx}" fill="none" stroke="red" stroke-width="1"/>`;
 
-  // draw lines with horizontal scaling
-  lines.forEach((ln, i)=>{
-    const maxWidth = W - marginSidePx * 2;
+  lines.forEach((ln,i)=>{
+    // horizontal scaling based on text length
+    const maxWidth = W - marginSidePx*2;
+    const approxWidth = ln.text.length * ln.size * 0.6; // approximate width per character
+    const scaleX = Math.min(1, maxWidth / approxWidth);
 
-    // measure text width using a temporary SVG element
-    const tempText = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    tempText.setAttribute("font-size", ln.size);
-    tempText.setAttribute("font-family", ln.font || "Arial");
-    tempText.textContent = ln.text;
-    document.body.appendChild(tempText);
-    const measuredWidth = tempText.getBBox().width;
-    document.body.removeChild(tempText);
+    // SVG text with horizontal scaling using <g> transform
+    svg += `<g transform="translate(${W/2},${startY}) scale(${scaleX},1)">
+              <text x="0" y="0" font-family="${ln.font||'Arial'}" font-size="${ln.size}" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}" text-anchor="middle" dominant-baseline="alphabetic">${ln.text}</text>
+            </g>`;
 
-    const scaleX = Math.min(1, maxWidth / measuredWidth);
-
-    // add SVG text with horizontal scale and alphabetic baseline
-    svg += `<text x="${W/2}" y="${startY}" font-family="${ln.font || 'Arial'}" font-size="${ln.size}" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}" text-anchor="middle" dominant-baseline="alphabetic" transform="translate(${W/2},${startY}) scale(${scaleX},1)">${ln.text}</text>`;
-
-    if(i===0 && lines.length>1) startY += gap12Px + (lines[1] ? lines[1].size : 0);
-    else if(i===1 && lines.length>2) startY += gap23Px + (lines[2] ? lines[2].size : 0);
+    if(i===0 && lines.length>1) startY += gap12Px + (lines[1]?lines[1].size:0);
+    else if(i===1 && lines.length>2) startY += gap23Px + (lines[2]?lines[2].size:0);
   });
 
   svg += `</svg>`;
