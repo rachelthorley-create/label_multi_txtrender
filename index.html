@@ -13,7 +13,7 @@
 </style>
 </head>
 <body>
-  <h2>Label Renderer v1.2</h2>
+  <h2>Label Renderer v1.3</h2>
   <p>Upload a JSON file exported from the generator to render PNG previews and download SVGs for all labels.</p>
   
   <input type="file" id="uploadLabel" accept=".json">
@@ -105,6 +105,7 @@ function drawLabelToCanvas(labelObj, params){
   const bottomY = Hpx - marginSidePx;
   const avail = bottomY - topTextY;
   let startY = topTextY + (avail-totalH)*0.55 + (lines.length>0?lines[0].size*0.75:0);
+  // vertical start position
 
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
@@ -173,7 +174,7 @@ function createLabelSVG(labelObj, params){
   lines.forEach((ln,i)=>{
     const fontStyle = (ln.italic?'italic ':'')+(ln.bold?'bold ':'')+`${ln.size}px ${ln.font||'Arial'}`;
     let x=W/2, y=startY;
-    svg+=`<text x="${x}" y="${y}" font-family="${ln.font||'Arial'}" font-size="${ln.size}" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}" text-anchor="middle">${ln.text}</text>`;
+    svg+=`<text x="${x}" y="${y}" font-family="${ln.font||'Arial'}" font-size="${ln.size}" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}" text-anchor="middle" dominant-baseline="alphabetic">${ln.text}</text>`;
     if(i===0 && lines.length>1) startY+=gap12Px+(lines[1]?lines[1].size:0);
     else if(i===1 && lines.length>2) startY+=gap23Px+(lines[2]?lines[2].size:0);
   });
