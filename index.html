@@ -1,0 +1,199 @@
+<!-- Save as label-renderer.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Label Renderer — from JSON</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;margin:18px;display:flex;flex-direction:column;align-items:center}
+  input,button{margin:6px}
+  #svgs{display:flex;flex-direction:column;gap:18px;width:100%;max-width:900px}
+  .svgWrap{border:1px solid #ddd;padding:8px;border-radius:6px;display:flex;flex-direction:column;align-items:center}
+  .svgWrap svg{width:378px;height:283px}
+</style>
+</head>
+<body>
+  <h2>Label Renderer (upload JSON instructions)</h2>
+  <p style="max-width:900px;text-align:center">
+    Upload the JSON file exported by the generator. This will recreate each label as an SVG (white canvas with red outlines and blue text). You can download all SVGs as a ZIP.
+  </p>
+
+  <input id="fileInput" type="file" accept=".json,.txt,application/json" />
+  <button id="renderBtn" disabled>Render</button>
+  <button id="downloadZipBtn" disabled>Download All SVGs (ZIP)</button>
+
+  <div id="svgs"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script>
+/* Renderer — parse JSON and produce SVGs matching generator layout */
+const mmToPx = mm => mm * 3.78; // used only if needed; we will use mm units in SVG output
+let parsedData = null;
+
+const fileInput = document.getElementById('fileInput');
+const renderBtn = document.getElementById('renderBtn');
+const downloadZipBtn = document.getElementById('downloadZipBtn');
+const svgsDiv = document.getElementById('svgs');
+
+fileInput.addEventListener('change', ()=> renderBtn.disabled = !fileInput.files.length);
+
+/* Helper: create SVG element string for a single label (uses mm units) */
+function buildSvgStringForLabel(data, labelObj){
+  // data.canvas: widths etc in mm
+  const Wmm = data.canvas.width_mm;
+  const Hmm = data.canvas.height_mm;
+  const cornerRmm = data.canvas.corner_radius_mm;
+  const circleTopMm = data.canvas.circle_top_mm;
+  const circleRmm = data.canvas.circle_diameter_mm / 2;
+  const marginSideMm = data.canvas.margin_side_mm;
+  const topExtraMm = data.canvas.top_margin_extra_mm;
+
+  const textShift = data.global.text_shift_mm || 0;
+  const gap12 = data.global.linkGaps ? data.global.gap12_mm : data.global.gap12_mm;
+  let gap23 = data.global.linkGaps ? (data.global.gap12_mm) : (data.global.gap23_mm || data.global.gap23_mm);
+
+  // sizes
+  const size1 = data.sizes.line1_size;
+  const size2 = data.sizes.line2_size;
+  const size3 = data.sizes.line3_size;
+
+  // Compose lines array similar to generator
+  const linesArr = [];
+  if(labelObj.lines.line1 && labelObj.lines.line1.text !== undefined) {
+    linesArr.push({
+      text: labelObj.lines.line1.text,
+      size: labelObj.lines.line1.size || size1,
+      font: labelObj.lines.line1.font || data.fonts.line1,
+      bold: !!labelObj.lines.line1.bold,
+      italic: !!labelObj.lines.line1.italic
+    });
+  }
+  if(labelObj.lines.line2 && labelObj.lines.line2.text !== undefined) {
+    linesArr.push({
+      text: labelObj.lines.line2.text,
+      size: labelObj.lines.line2.size || size2,
+      font: labelObj.lines.line2.font || data.fonts.line2,
+      bold: !!labelObj.lines.line2.bold,
+      italic: !!labelObj.lines.line2.italic
+    });
+  }
+  if(labelObj.lines.line3 && labelObj.lines.line3.text !== undefined) {
+    linesArr.push({
+      text: labelObj.lines.line3.text,
+      size: labelObj.lines.line3.size || size3,
+      font: labelObj.lines.line3.font || data.fonts.line3,
+      bold: !!labelObj.lines.line3.bold,
+      italic: !!labelObj.lines.line3.italic
+    });
+  }
+
+  // We'll compute vertical positions in px using a temporary canvas measure to determine horizontal scale factor
+  // But when outputting SVG we'll embed transforms similarly.
+  // Create temp canvas to measure widths (px)
+  const tempCanvas = document.createElement('canvas');
+  const tctx = tempCanvas.getContext('2d');
+
+  // Convert mm dims to px for measurements
+  const Wpx = mmToPx(Wmm);
+  const marginPx = mmToPx(marginSideMm);
+  const circleTopPx = mmToPx(circleTopMm);
+  const circleRPx = mmToPx(circleRmm);
+  const topExtraPx = mmToPx(topExtraMm);
+  const textShiftPx = mmToPx(textShift);
+
+  // compute total height in px
+  let totalH = 0;
+  linesArr.forEach((ln, i) => {
+    totalH += ln.size;
+    if(i === 0 && linesArr.length > 1) totalH += mmToPx(data.global.gap12_mm || 0);
+    if(i === 1 && linesArr.length > 2) totalH += mmToPx(data.global.linkGaps ? data.global.gap12_mm : data.global.gap23_mm || 0);
+  });
+
+  // compute top and available area
+  const topTextYpx = circleTopPx + circleRPx + topExtraPx + textShiftPx;
+  const bottomYpx = mmToPx(Hmm) - mmToPx(data.canvas.margin_side_mm || 0);
+  const availablePx = bottomYpx - topTextYpx;
+
+  let curYpx = topTextYpx + (availablePx - totalH)/2 + (linesArr[0] ? linesArr[0].size * 0.75 : 0);
+
+  // Begin SVG builder
+  const svgParts = [];
+  svgParts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${Wmm}mm" height="${Hmm}mm" viewBox="0 0 ${Wpx} ${mmToPx(Hmm)}">`);
+  // white rect with red outline and rounded corners (stroke 1px)
+  svgParts.push(`<rect x="0" y="0" width="${Wpx}" height="${mmToPx(Hmm)}" rx="${mmToPx(cornerRmm)}" ry="${mmToPx(cornerRmm)}" fill="white" stroke="red" stroke-width="1"/>`);
+  // circle with red stroke (no fill)
+  svgParts.push(`<circle cx="${Wpx/2}" cy="${circleTopPx+circleRPx}" r="${circleRPx}" fill="none" stroke="red" stroke-width="1"/>`);
+
+  // For each line, compute horizontal scale and add text element converting px positions to SVG coordinates
+  linesArr.forEach((ln, idx) => {
+    // set font in temp ctx to measure
+    let fs = '';
+    if(ln.bold) fs += 'bold ';
+    if(ln.italic) fs += 'italic ';
+    fs += `${ln.size}px ${ln.font}`;
+    tctx.font = fs;
+    const measured = tctx.measureText(ln.text).width;
+    const maxW = Wpx - 2 * marginPx;
+    const scaleX = Math.min(1, maxW / measured);
+
+    if(scaleX < 1) {
+      // When scaled, we'll place a <g transform="translate(cx,cy) scale(scaleX,1)"><text x="0" y="0" ...>...</text></g>
+      svgParts.push(`<g transform="translate(${Wpx/2},${curYpx}) scale(${scaleX},1)"><text x="0" y="0" text-anchor="middle" font-family="${ln.font}" font-size="${ln.size}px" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}">${escapeXml(ln.text)}</text></g>`);
+    } else {
+      svgParts.push(`<text x="${Wpx/2}" y="${curYpx}" text-anchor="middle" font-family="${ln.font}" font-size="${ln.size}px" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}">${escapeXml(ln.text)}</text>`);
+    }
+
+    // advance curY
+    if(idx === 0 && linesArr.length > 1) curYpx += mmToPx(data.global.gap12_mm || 0) + (linesArr[1] ? linesArr[1].size : 0);
+    else if(idx === 1 && linesArr.length > 2) curYpx += mmToPx(data.global.linkGaps ? data.global.gap12_mm : data.global.gap23_mm || 0) + (linesArr[2] ? linesArr[2].size : 0);
+  });
+
+  svgParts.push('</svg>');
+  return svgParts.join('\n');
+}
+
+function escapeXml(s){
+  return (''+s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&apos;','"':'&quot;'}[c]));
+}
+
+renderBtn.addEventListener('click', ()=>{
+  const file = fileInput.files[0];
+  if(!file) return alert('Choose a JSON file first');
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      parsedData = JSON.parse(reader.result);
+    } catch(e){
+      return alert('Invalid JSON file: ' + e.message);
+    }
+    svgsDiv.innerHTML = '';
+    parsedData.labels.forEach(lbl => {
+      const str = buildSvgStringForLabel(parsedData, lbl);
+      const wrap = document.createElement('div');
+      wrap.className = 'svgWrap';
+      wrap.innerHTML = `<div style="margin-bottom:8px"><strong>${lbl.name || 'Label'}</strong></div>` + str;
+      svgsDiv.appendChild(wrap);
+    });
+    downloadZipBtn.disabled = false;
+  };
+  reader.readAsText(file);
+});
+
+downloadZipBtn.addEventListener('click', ()=>{
+  if(!parsedData) return;
+  const zip = new JSZip();
+  parsedData.labels.forEach(lbl=>{
+    const svgStr = buildSvgStringForLabel(parsedData, lbl);
+    const name = (lbl.name || 'label').replace(/[\/\\?%*:|"<> ]/g,'_') + '.svg';
+    zip.file(name, svgStr);
+  });
+  zip.generateAsync({type:'blob'}).then(content => saveAs(content,'labels_svg.zip'));
+});
+
+/* allow drag-drop? (optional) */
+fileInput.addEventListener('change', ()=> renderBtn.disabled = !fileInput.files.length);
+</script>
+</body>
+</html>
