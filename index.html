@@ -1,9 +1,15 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Label Render</title>
+
+  <!-- JSZip library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+
 <style>
   body{font-family:Arial,Helvetica,sans-serif;margin:18px;display:flex;flex-direction:column;align-items:center}
   #uploadLabel{margin-bottom:15px}
@@ -13,7 +19,7 @@
 </style>
 </head>
 <body>
-  <h2>Label Renderer v1.3</h2>
+  <h2>Label Renderer v1.4</h2>
   <p>Upload a JSON file exported from the generator to render PNG previews and download SVGs for all labels.</p>
   
   <input type="file" id="uploadLabel" accept=".json">
@@ -136,79 +142,102 @@ function drawLabelToCanvas(labelObj, params){
 
 /* Draw single label as SVG */
 function createLabelSVG(labelObj, params){
-  const W = params.canvas.width_mm*3.78;
-  const H = params.canvas.height_mm*3.78;
-  const radius = params.canvas.corner_radius_mm*3.78;
-  const circleRPx = params.canvas.circle_diameter_mm/2*3.78;
-  const circleTopPx = params.canvas.circle_top_mm*3.78;
-  const marginSidePx = params.canvas.margin_side_mm*3.78;
-  const topExtraPx = params.canvas.top_margin_extra_mm*3.78;
-  const textShiftPx = params.global.text_shift_mm*3.78 || 0;
-  const gap12Px = params.global.gap12_mm*3.78 || 0;
-  const gap23Px = (params.global.linkGaps ? params.global.gap12_mm : params.global.gap23_mm || 0)*3.78;
+  const W = params.canvas.width_mm * 3.78;
+  const H = params.canvas.height_mm * 3.78;
+  const radius = params.canvas.corner_radius_mm * 3.78;
+  const circleRPx = params.canvas.circle_diameter_mm / 2 * 3.78;
+  const circleTopPx = params.canvas.circle_top_mm * 3.78;
+  const marginSidePx = params.canvas.margin_side_mm * 3.78;
+  const topExtraPx = params.canvas.top_margin_extra_mm * 3.78;
+  const textShiftPx = (params.global.text_shift_mm || 0) * 3.78;
+  const gap12Px = (params.global.gap12_mm || 0) * 3.78;
+  const gap23Px = ((params.global.linkGaps ? params.global.gap12_mm : params.global.gap23_mm || 0) * 3.78);
 
   // prepare lines
-  const lines=[];
+  const lines = [];
   lines.push({...labelObj.lines.line1});
   if(labelObj.lines.line2.text || labelObj.lines.line3.text) lines.push({...labelObj.lines.line2});
   if(labelObj.lines.line3.text) lines.push({...labelObj.lines.line3});
 
   // compute total height
-  let totalH=0;
-  lines.forEach((ln,i)=>{
-    totalH+=ln.size;
-    if(i===0 && lines.length>1) totalH+=gap12Px;
-    if(i===1 && lines.length>2) totalH+=gap23Px;
+  let totalH = 0;
+  lines.forEach((ln, i)=>{
+    totalH += ln.size;
+    if(i===0 && lines.length>1) totalH += gap12Px;
+    if(i===1 && lines.length>2) totalH += gap23Px;
   });
 
   const topTextY = circleTopPx + circleRPx + topExtraPx + textShiftPx;
-  const bottomY = H-marginSidePx;
-  const avail = bottomY-topTextY;
-  let startY = topTextY + (avail-totalH)*0.55 + (lines.length>0?lines[0].size*0.75:0);
+  const bottomY = H - marginSidePx;
+  const avail = bottomY - topTextY;
+  let startY = topTextY + (avail - totalH) * 0.55 + (lines.length > 0 ? lines[0].size * 0.75 : 0);
 
-  // Start SVG
-  let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">`;
-  svg+=`<rect x="0" y="0" width="${W}" height="${H}" rx="${radius}" ry="${radius}" fill="white" stroke="red" stroke-width="1"/>`;
-  svg+=`<circle cx="${W/2}" cy="${circleTopPx+circleRPx}" r="${circleRPx}" fill="none" stroke="red" stroke-width="1"/>`;
+  // start SVG
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">`;
+  svg += `<rect x="0" y="0" width="${W}" height="${H}" rx="${radius}" ry="${radius}" fill="white" stroke="red" stroke-width="1"/>`;
+  svg += `<circle cx="${W/2}" cy="${circleTopPx + circleRPx}" r="${circleRPx}" fill="none" stroke="red" stroke-width="1"/>`;
 
-  lines.forEach((ln,i)=>{
-    const fontStyle = (ln.italic?'italic ':'')+(ln.bold?'bold ':'')+`${ln.size}px ${ln.font||'Arial'}`;
-    let x=W/2, y=startY;
-    svg+=`<text x="${x}" y="${y}" font-family="${ln.font||'Arial'}" font-size="${ln.size}" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}" text-anchor="middle" dominant-baseline="alphabetic">${ln.text}</text>`;
-    if(i===0 && lines.length>1) startY+=gap12Px+(lines[1]?lines[1].size:0);
-    else if(i===1 && lines.length>2) startY+=gap23Px+(lines[2]?lines[2].size:0);
+  // draw lines with horizontal scaling
+  lines.forEach((ln, i)=>{
+    const maxWidth = W - marginSidePx * 2;
+
+    // measure text width using a temporary SVG element
+    const tempText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    tempText.setAttribute("font-size", ln.size);
+    tempText.setAttribute("font-family", ln.font || "Arial");
+    tempText.textContent = ln.text;
+    document.body.appendChild(tempText);
+    const measuredWidth = tempText.getBBox().width;
+    document.body.removeChild(tempText);
+
+    const scaleX = Math.min(1, maxWidth / measuredWidth);
+
+    // add SVG text with horizontal scale and alphabetic baseline
+    svg += `<text x="${W/2}" y="${startY}" font-family="${ln.font || 'Arial'}" font-size="${ln.size}" fill="blue" font-weight="${ln.bold?'bold':'normal'}" font-style="${ln.italic?'italic':'normal'}" text-anchor="middle" dominant-baseline="alphabetic" transform="translate(${W/2},${startY}) scale(${scaleX},1)">${ln.text}</text>`;
+
+    if(i===0 && lines.length>1) startY += gap12Px + (lines[1] ? lines[1].size : 0);
+    else if(i===1 && lines.length>2) startY += gap23Px + (lines[2] ? lines[2].size : 0);
   });
 
-  svg+='</svg>';
+  svg += `</svg>`;
   return svg;
 }
+
 
 /* Preview Labels */
 function previewLabels(){
   if(!labelData) return alert("Upload JSON first");
-  allPreviews.innerHTML='';
+  allPreviews.innerHTML = '';
   labelData.labels.forEach(lbl=>{
-    for(let i=0;i<lbl.qty;i++){
-      const c=drawLabelToCanvas(lbl,labelData);
-      allPreviews.appendChild(c);
-    }
+    const header = document.createElement('div');
+    header.style.fontWeight = 'bold';
+    header.style.marginTop = '10px';
+    header.textContent = `${lbl.name} - ${lbl.qty} copies`;
+    allPreviews.appendChild(header);
+
+    const c = drawLabelToCanvas(lbl,labelData);
+    allPreviews.appendChild(c);
   });
 }
-
+  
 /* Download all SVGs as separate files */
 function downloadSVGs(){
   if(!labelData) return alert("Upload JSON first");
+  const zip = new JSZip();
+
   labelData.labels.forEach(lbl=>{
-    for(let i=0;i<lbl.qty;i++){
-      const svg=createLabelSVG(lbl,labelData);
-      const a=document.createElement('a');
-      a.href=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));
-      a.download=`${lbl.name}_${lbl.qty}copies.svg`;
-      a.click();
-    }
+    const svg = createLabelSVG(lbl,labelData);
+    zip.file(`${lbl.name}_${lbl.qty}copies.svg`, svg);
+  });
+
+  zip.generateAsync({type:"blob"}).then(function(content){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(content);
+    a.download = "labels.zip";
+    a.click();
   });
 }
-
+  
 previewBtn.addEventListener('click',previewLabels);
 downloadBtn.addEventListener('click',downloadSVGs);
 </script>
